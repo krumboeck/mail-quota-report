@@ -1,0 +1,1 @@
+Quota-Report {deployment} {date}: {n} Mailboxen, {warn} Warnung, {crit} kritisch

@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Build-/CI-Artefakte
+build/
+dist/
+sbom/
+
+# Virtuelle Umgebungen (nur für lokale Sandbox-Tests; Produkt = Distro-Pakete)
+.venv/
+venv/

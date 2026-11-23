@@ -1,0 +1,69 @@
+# ci/smoke/config.yaml — Jenkins-Smoke-Test-Konfiguration (FAIL-CLOSED-Test).
+#
+# Nur für die smoke-Stage im Jenkinsfile: der Container startet MIT dieser
+# Config im --selftest und muss grün sein; ohne jede Config muss er mit
+# Exit 1 verweigern (fail-closed). Alle Werte sind FAKES — example.org/.at,
+# erfundene Hosts, Dummy-Secrets. Keine Produktivdaten, keine echten
+# Zugangsdaten (Secrets liegen produktiv in Docker-Secrets/Passbolt, nie
+# im Repo — siehe SECURITY.md).
+#
+# selftest.network_probes bleibt aus: der Smoke-Test läuft ohne Netz.
+
+deployment: ci-smoke
+
+report:
+  mode: all
+  language: de
+  number_format: de_DE
+  subject: "Quota-Report {deployment} {date}: {n} Mailboxen, {warn} Warnung, {crit} kritisch"
+  recipients:
+    - smoke@example.org
+  thresholds: {warn_percent: 80, critical_percent: 95}
+  sort: percent_desc
+  group_by_tenant: false
+  hide_zero_limit: false
+
+message:
+  format: both
+  templates:
+    subject: subject.txt
+    text: report.txt.j2
+    html: report.html.j2
+
+collect:
+  type: doveadm_tcp
+  tcp:
+    endpoint: smoke-doveadm.example:4242   # Fake — kein Netz im Smoke-Test
+    password_file: /ci/smoke/fake_doveadm_password
+    ssl: no
+    timeout: 5
+  enumeration: ldap
+
+ldap:
+  uri: ldap://smoke-ldap.example
+  starttls: false
+  bind_dn_file: /ci/smoke/fake_bind_dn
+  bind_pw_file: /ci/smoke/fake_bind_pw
+  tenant_bases:
+    - "ou=users,dc=example,dc=org"
+  filter: "(mail=*)"
+  attributes:
+    username: uid
+    first_name: givenName
+    last_name: sn
+    mail_primary: mail
+    mail_aliases: mailAddresses
+    department: departmentNumber
+    company: o
+    quota_limit: mailQuota
+  match: [mail_primary, mail_aliases, username]
+  groups:
+    match_mode: member_filter
+    include: []
+    exclude: []
+
+smtp:
+  host: smoke-relay.example
+  port: 25
+  starttls: false
+  sender: quota-report@example.org

@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Quota-Report {{ summary.deployment }} — {{ summary.date }}</title>
+<style>
+  /* Inline-CSS, keine externen Ressourcen */
+  body { font-family: sans-serif; color: #202020; margin: 1em; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9em; }
+  th, td { border: 1px solid #c0c0c0; padding: 4px 8px; text-align: left; }
+  th { background: #f0f0f0; }
+  /* Schwellwert-Hervorhebung: >=80 % WARNUNG (gelb), >=95 % KRITISCH (rot) */
+  tr.warn td.status { background: #ffe680; }
+  tr.critical td.status { background: #ff9999; }
+  .summary { margin-top: 1em; font-size: 0.9em; color: #404040; }
+  .empty { padding: 1em 0; }
+</style>
+</head>
+<body>
+<h2>Quota-Report {{ summary.deployment }} — {{ summary.date }}</h2>
+<p>
+Geprüfte Mailboxen: {{ summary.n }} — Schwellwerte:
+WARNUNG ab {{ summary.warn_percent }} %, KRITISCH ab {{ summary.critical_percent }} %.
+{% if summary.mode == "below_threshold" %}Berichtsmodus: nur Mailboxen mit {{ summary.threshold_desc }}.{% endif %}
+</p>
+{% if rows %}
+{% if groups %}
+{% for tenant, trows in groups.items() -%}
+<h3>Mandant {{ tenant }} ({{ trows | length }} Mailboxen)</h3>
+<table>
+<thead>
+<tr><th>Name</th><th>Mail-Adressen</th><th>Abteilung</th><th>Firma</th>
+<th>Benutzt</th><th>Limit</th><th>Frei</th><th>Auslastung</th><th>Status</th></tr>
+</thead>
+<tbody>
+{% for row in trows -%}
+<tr class="{{ row.status_class }}">
+<td>{{ row.name }}</td>
+<td>{{ row.mail_primary }}{% if row.mail_aliases %} ({{ row.mail_aliases | join(", ") }}){% endif %}</td>
+<td>{{ row.department }}</td>
+<td>{{ row.company }}</td>
+<td>{{ row.used }}</td>
+<td>{{ row.limit }}</td>
+<td>{{ row.free }}</td>
+<td>{{ row.percent }}</td>
+<td class="status">{{ row.status }}</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+{% endfor -%}
+{% else %}
+<table>
+<thead>
+<tr><th>Name</th><th>Mail-Adressen</th><th>Abteilung</th><th>Firma</th>
+<th>Benutzt</th><th>Limit</th><th>Frei</th><th>Auslastung</th><th>Status</th></tr>
+</thead>
+<tbody>
+{% for row in rows -%}
+<tr class="{{ row.status_class }}">
+<td>{{ row.name }}</td>
+<td>{{ row.mail_primary }}{% if row.mail_aliases %} ({{ row.mail_aliases | join(", ") }}){% endif %}</td>
+<td>{{ row.department }}</td>
+<td>{{ row.company }}</td>
+<td>{{ row.used }}</td>
+<td>{{ row.limit }}</td>
+<td>{{ row.free }}</td>
+<td>{{ row.percent }}</td>
+<td class="status">{{ row.status }}</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+{% endif %}
+{% if errors %}
+<h3>Fehler (doveadm)</h3>
+<ul>
+{% for e in errors -%}
+<li>{{ e }}</li>
+{% endfor %}
+</ul>
+{% endif %}
+{% else %}
+<p class="empty">Keine Mailboxen {% if summary.mode == "below_threshold" %}unter dem Schwellwert ({{ summary.threshold_desc }}){% else %}im Bericht{% endif %} — kein Handlungsbedarf.</p>
+{% endif %}
+<p class="summary">
+Zusammenfassung: {{ summary.n }} Mailboxen geprüft, {{ summary.warn }} Warnung, {{ summary.crit }} kritisch,
+{{ summary.no_ldap }} ohne LDAP-Eintrag, {{ summary.no_quota }} ohne Quota-Datensatz.
+Automatisch erzeugt von mail-quota-report (Version {{ summary.version }}).
+</p>
+</body>
+</html>

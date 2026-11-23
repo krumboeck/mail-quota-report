@@ -1,0 +1,183 @@
+# config-example.yml — mail-quota-report
+#
+# Complete, commented configuration reference. Copy to your deployment
+# config (e.g. config/config.yaml), mount it read-only into the
+# container (default path /etc/mail-quota-report/config.yaml) and adapt
+# it to your site. See README.md for the full documentation.
+#
+# NEVER put secrets in this file — only paths to secret files (the
+# *_FILE pattern). A missing, unreadable or empty secret file makes the
+# container refuse to start (fail-closed, exit 1). There are no default
+# credentials.
+
+# Free-form label for the site/tenant this deployment reports on —
+# appears in subject line and report header.
+deployment: example
+
+report:
+  # Report mode:
+  #   all              — every enumerated mailbox goes into the report
+  #   below_threshold  — only mailboxes whose FREE space (limit - used)
+  #                       drops below the threshold
+  mode: all
+  # Threshold for mode: below_threshold — either as a share of the
+  # limit or as a fixed remaining size:
+  #   threshold:
+  #     type: percent        # share of the limit
+  #     value: 80            # = free space < 80 % of the mailbox limit
+  #   threshold:
+  #     type: fixed          # fixed remaining storage
+  #     value: 5GB           # suffixes: kB | MB | GB (also 512MB, 1GB)
+  # With mode: all the threshold is ignored (the highlight thresholds
+  # further down still apply).
+  threshold:
+    type: percent
+    value: 80
+  # Report language / number format: German in this version. The wording
+  # lives entirely in the templates and subject schema (message.*), so
+  # other languages are a template customization.
+  language: de
+  number_format: de_DE          # 9,82 GB von 10,00 GB — 98 %
+  # Subject schema (single line, simple {placeholders}):
+  #   {deployment} {date} {n} {warn} {crit} {no_ldap} {no_quota}
+  subject: "Quota-Report {deployment} {date}: {n} Mailboxen, {warn} Warnung, {crit} kritisch"
+  recipients:                   # one or more report recipients
+    - postmaster@example.net
+  # Highlight thresholds: rows >= warn_percent are marked WARNING,
+  # rows >= critical_percent CRITICAL (visual markup in the report).
+  thresholds: {warn_percent: 80, critical_percent: 95}
+  sort: percent_desc            # percent_desc | name_asc | limit_desc
+  # Per-tenant grouping with subtotals — enable for multi-tenant OpenLDAP
+  # layouts where the tenant is part of the DN (cd=<domain> component,
+  # derived automatically; see the active ldap pattern below). Single-
+  # domain sites (see the AD pattern) usually keep this off.
+  group_by_tenant: true
+  hide_zero_limit: false        # optionally hide service accounts with limit 0
+
+message:
+  # Delivery format: text | html | both (multipart/alternative)
+  format: both
+  # Templates: shipped defaults (German) or your own directory (mount it
+  # into the container and set template_dir accordingly). templates maps
+  # purpose -> file name relative to template_dir.
+  template_dir: /app/templates
+  templates:
+    subject: subject.txt       # placeholders only, no layout
+    text: report.txt.j2       # plain-text report
+    html: report.html.j2       # HTML report (inline CSS, no externals)
+
+collect:
+  # Collector type:
+  #   doveadm_tcp — query Dovecot's own doveadm server over TCP
+  #                 (host:port via Swarm/compose DNS): host-agnostic,
+  #                 no SSH provisioning needed. Default and recommended.
+  #   ssh_exec    — fallback: run doveadm on the mail host via SSH +
+  #                 docker exec (see the commented pattern 2 below)
+  type: doveadm_tcp
+  tcp:
+    # host:port — the DNS name of the Dovecot service inside your
+    # container network. Server side (dovecot.conf):
+    #   service doveadm {
+    #     inet_listener doveadm {
+    #       port = 4242
+    #     }
+    #   }
+    #   doveadm_password = <same secret as password_file below>
+    # Pick any free port per environment (4242 is just an example);
+    # keep the listener on a dedicated container network — it is an
+    # administration protocol and must not be published to the outside.
+    endpoint: dovecot:4242
+    # doveadm_password: required for the TCP protocol — the SAME value
+    # on the server and here. Provided as a secret file, never inline.
+    password_file: /run/secrets/mqr_doveadm_password
+    # TLS: no | ssl | starttls (Dovecot setting doveadm_ssl). Default
+    # no — safe only inside a dedicated/isolated network; set ssl or
+    # starttls whenever the path is not dedicated.
+    ssl: no
+    timeout: 30
+  enumeration: ldap              # mailbox list comes from the directory
+  # --- PATTERN 2: ssh_exec fallback — activate only in environments
+  #     without a doveadm listener (comment out the doveadm_tcp block
+  #     above and this "type"/"tcp" pair, then use) ---
+  # type: ssh_exec
+  # ssh:
+  #   # docker exec is node-local: the report must reach a node the
+  #   # Dovecot container actually runs on — list all candidate hosts.
+  #   hosts: [mail1.example.net, mail2.example.net]
+  #   container_filter: dovecot    # container name / docker ps filter
+  #   user: root
+  #   key_file: /run/secrets/mqr_ssh_key
+  #   # port: 22
+  #   # connect_timeout: 10
+  #   # timeout: 300
+
+ldap:
+  # PATTERN 1 (active): OpenLDAP, multi-tenant — one search base per
+  # tenant, the tenant resolved from the cd=<domain> DN component
+  # (drives report.group_by_tenant). The commented AD pattern below
+  # covers single-domain sites.
+  uri: ldap://ldap.example.net
+  starttls: true                 # match your server's capabilities
+  # Dedicated read-only bind account for the report (never the mail
+  # server's own bind): DN and password as separate secret files.
+  bind_dn_file: /run/secrets/mqr_ldap_bind_dn
+  bind_pw_file: /run/secrets/mqr_ldap_bind_pw
+  tenant_bases:                  # one search base per tenant
+    - "ou=users,cd=example.com,dc=ldap,dc=example,dc=net"
+    - "ou=users,cd=example.org,dc=ldap,dc=example,dc=net"
+  filter: "(mail=*)"
+  attributes:                    # report field -> directory attribute
+    username: uid                # uid here; schemas where the mail
+                                 # attribute doubles as login use: mail
+    first_name: givenName
+    last_name: sn
+    mail_primary: mail
+    mail_aliases: mailAddresses  # multi-valued (OpenLDAP)
+    department: departmentNumber
+    company: o
+    quota_limit: mailQuota      # reference display only — schemas differ
+                               # in the unit (kB / GiB): document yours
+  match: [mail_primary, mail_aliases, username]   # first hit wins
+  groups:
+    match_mode: member_filter    # member_filter | memberof_attr
+    include: []                  # empty = all mailboxes
+    exclude: []                  # exclude wins over include
+
+smtp:
+  host: smtp                     # relay alias inside the container network
+  port: 25
+  starttls: off                  # off for a dedicated internal relay whose
+                                 # certificate does not match the alias;
+                                 # on where supported
+  sender: quota-report@example.net
+  # password_file: /run/secrets/mqr_smtp_password   # only if AUTH needed
+
+# selftest:
+#   network_probes: true    # --selftest additionally tries the LDAP bind
+#                           # and SMTP connectivity (no mail is sent)
+
+# --- PATTERN 3: Active Directory (single domain) — swap the ldap block:
+# ldap:
+#   uri: ldaps://dc1.example.com       # TLS via ldaps://; alternatively
+#   starttls: false                    # ldap:// + starttls: true
+#   bind_dn_file / bind_pw_file / tenant_bases: as above, one base:
+#   tenant_bases: ["DC=example,DC=com"]
+#   filter: "(mail=*)"
+#   attributes:
+#     username: sAMAccountName         # may differ from the mail address
+#     first_name: givenName
+#     last_name: sn
+#     mail_primary: mail
+#     mail_aliases: proxyAddresses    # SMTP:/smtp: prefixes stripped
+#     department: department
+#     company: company
+#     quota_limit: <attribute, if you store quota limits in AD>
+#   match: [mail_primary, mail_aliases, username]
+#   groups:
+#     match_mode: memberof_attr        # memberOf on the user entry
+#     include: []
+#     exclude: []
+# report.group_by_tenant: false       # single-domain sites usually don't
+#                                      # need per-domain subtotals
+# Directory servers outside the container network: resolve them via your
+# platform's host-mapping mechanism and pin the certificate trust.

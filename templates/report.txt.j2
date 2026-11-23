@@ -1,0 +1,38 @@
+Quota-Report {{ summary.deployment }} — {{ summary.date }}
+==================================================
+
+Berichtsmodus: {% if summary.mode == "below_threshold" %}nur Mailboxen mit {{ summary.threshold_desc }}{% else %}alle Benutzer{% endif %}
+
+{% if rows %}
+Geprüfte Mailboxen:   {{ summary.n }}
+Ohne LDAP-Eintrag:     {{ summary.no_ldap }}
+Ohne Quota-Datensatz:  {{ summary.no_quota }}
+Schwellwerte:         WARNUNG >= {{ summary.warn_percent }} %, KRITISCH >= {{ summary.critical_percent }} %
+
+{% if groups %}
+{% for tenant, trows in groups.items() -%}
+== Mandant {{ tenant }} ({{ trows | length }} Mailboxen) ==
+{% for row in trows -%}
+{{ "%-30s" | format(row.name) }} | {{ row.mail_primary }} | {{ row.used }} von {{ row.limit }} — {{ row.percent }} | {{ row.status }}
+{% endfor %}
+{% endfor -%}
+{% else %}
+{% for row in rows -%}
+{{ "%-30s" | format(row.name) }} | {{ row.mail_primary }} | {{ row.used }} von {{ row.limit }} — {{ row.percent }} | {{ row.status }}
+{% endfor %}
+{% endif %}
+{% if errors %}
+Fehler (doveadm):
+{% for e in errors -%}
+- {{ e }}
+{% endfor %}
+{% endif %}
+Zusammenfassung: {{ summary.n }} Mailboxen geprüft, {{ summary.warn }} Warnung, {{ summary.crit }} kritisch,
+{{ summary.no_ldap }} ohne LDAP-Eintrag, {{ summary.no_quota }} ohne Quota-Datensatz.
+{% else %}
+Keine Mailboxen {% if summary.mode == "below_threshold" %}unter dem Schwellwert ({{ summary.threshold_desc }}){% else %}im Bericht{% endif %} — kein Handlungsbedarf.
+{% endif %}
+
+Diese Nachricht wurde automatisch erzeugt von mail-quota-report
+(Version {{ summary.version }}). Auslastungsdaten: Dovecot; Stammdaten: Verzeichnis
+(LDAP/AD). Fragen zum Report: Administrator des jeweiligen Standorts.

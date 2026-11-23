@@ -215,6 +215,139 @@ Three separate layers:
 
 The LDAP bind account should be a dedicated read-only service account.
 
+## Configuration reference
+
+Compact overview of all YAML options; the fully commented
+[config-example.yml](config-example.yml) is the authoritative reference
+(and shows the three deployment patterns). Required keys are marked;
+everything else falls back to the built-in default.
+
+| Block | Key | Values / default | Notes |
+|---|---|---|---|
+| `deployment` | — | string, **required** | Free-form site label; appears in subject and report header |
+| `report` | `mode` | `all` \| `below_threshold` (default `all`) | `below_threshold` filters on *free* space |
+| | `threshold` | `{type: percent, value: 0..100}` or `{type: fixed, value: "5GB"\|"512MB"\|kB-number}` | **Required with** `mode: below_threshold`; ignored otherwise |
+| | `language` / `number_format` | `de` / `de_DE` | German in this version (wording lives in the templates) |
+| | `subject` | string with `{placeholders}` | **required**; see [subject schema](#report-templates) below |
+| | `recipients` | list of mail addresses | **required** |
+| | `thresholds` | `{warn_percent: 80, critical_percent: 95}` | WARNING/CRITICAL highlighting |
+| | `sort` | `percent_desc` \| `name_asc` \| `limit_desc` | |
+| | `group_by_tenant` / `hide_zero_limit` | bool (default `false`) | per-tenant subtotals / hide limit-0 rows |
+| `message` | `format` | `text` \| `html` \| `both` (default `both`) | `both` = multipart/alternative |
+| | `template_dir` | directory path (optional) | built-in templates if unset; see below |
+| | `templates` | `{subject: subject.txt, text: report.txt.j2, html: report.html.j2}` | per-purpose file names, defaults shown |
+| `collect` | `type` | `doveadm_tcp` (default) \| `ssh_exec` | TCP collector or SSH+`docker exec` fallback |
+| | `tcp.endpoint` | `host:port`, **required with `doveadm_tcp`** | Dovecot service DNS name in the container network |
+| | `tcp.password_file` | path, **required with `doveadm_tcp`** | shared `doveadm_password` as a file, never inline |
+| | `tcp.ssl` / `tcp.timeout` | `no` \| `ssl` \| `starttls` / seconds (30) | `no` only inside a dedicated isolated network |
+| | `ssh.hosts` … | `hosts` (list), `container_filter`, `user`, `key_file`, `port` (22), `connect_timeout` (10), `timeout` (300), `known_hosts_file` | **required with `ssh_exec`**; `docker exec` is node-local — list every candidate host |
+| | `enumeration` | `ldap` | mailbox list comes from the directory |
+| `ldap` | `uri` | `ldap://…` / `ldaps://…`, **required** | StartTLS via `starttls: true` |
+| | `bind_dn_file` / `bind_pw_file` | paths, **required** | dedicated read-only bind account, secrets as files |
+| | `tenant_bases` | list of DNs, **required** | one per tenant (OpenLDAP) or single base (AD) |
+| | `filter` | LDAP filter (default `(mail=*)`) | |
+| | `attributes` | mapping report field → directory attribute; `username` and `mail_primary` **required** | fields: `username`, `first_name`, `last_name`, `mail_primary`, `mail_aliases`, `department`, `company`, `quota_limit` |
+| | `match` | ordered list (default `[mail_primary, mail_aliases, username]`) | mailbox → entry match chain, first hit wins |
+| | `groups` | `{match_mode: member_filter \| memberof_attr, include: [], exclude: []}` | `exclude` wins over `include`; empty `include` = all |
+| `smtp` | `host` / `port` / `starttls` / `sender` | string / 25 / bool / address, `host`+`sender` **required** | local relay alias in the container network |
+| | `password_file` | path (optional) | only if the relay requires AUTH |
+| `selftest` | `network_probes` | bool (default `false`) | `--selftest` additionally probes LDAP bind and relay connectivity |
+
+**Secrets follow the `*_FILE` pattern**: the YAML only ever contains
+paths to files (`bind_dn_file`, `bind_pw_file`, `tcp.password_file`,
+optional `smtp.password_file`, optional `ssh.key_file`). Values never
+appear in the YAML, the environment or the image. A missing, unreadable
+or empty secret file aborts startup — fail-closed, exit 1. There are no
+default credentials.
+
+**ENV overrides** (runtime parameters, not secrets):
+
+| ENV | Default | Meaning |
+|---|---|---|
+| `SCHEDULE` | — (required for the scheduler) | `weekly`/`daily`/`monthly` aliases, 5-field cron, or intervals (`12h`, `30m`, `45m12h`, …) |
+| `TZ` | `Europe/Vienna` | schedule reference timezone |
+| `CONFIG_FILE` / `CONFIG_PATH` | `/etc/mail-quota-report/config.yaml` | config file location (`--config` wins) |
+| `HEARTBEAT_FILE` | `/tmp/last-run` | heartbeat file for the health check |
+| `HEALTHCHECK_MAX_AGE_H` | `26` | max heartbeat age in hours — scale with the schedule (weekly `170`, monthly `840`) |
+| `LOG_LEVEL` / `LOG_FORMAT` | `INFO` / `plain` | `json` for structured logs |
+
+## Report templates
+
+The report wording lives entirely in Jinja2 templates — language, layout
+and summary lines are pure template matter. Three files ship with the
+image (`templates/` in the repo, `/app/templates` in the container):
+
+| Purpose | Built-in file | Rendered as |
+|---|---|---|
+| `subject` | `subject.txt` | subject line (placeholders only, no layout) |
+| `text` | `report.txt.j2` | plain-text body |
+| `html` | `report.html.j2` | HTML body (inline CSS, no external resources) |
+
+**Overrides.** Mount your own directory into the container (read-only)
+and point `message.template_dir` at it; `message.templates` maps each
+purpose to a file name relative to that directory — override all three
+or just the ones you need:
+
+```yaml
+message:
+  format: both
+  template_dir: /etc/mail-quota-report/templates   # your mount
+  templates:                                        # defaults shown
+    subject: subject.txt
+    text: report.txt.j2
+    html: report.html.j2
+```
+
+Selection logic: each purpose is looked up by its mapped name in
+`template_dir`; if a file is missing there (and `template_dir` differs
+from the built-in directory), the renderer logs a warning and falls back
+to the built-in templates — a typo degrades gracefully instead of
+failing the run. Autoescaping applies to files ending in `.html.j2`
+only (directory data cannot inject HTML); text templates render as
+plain text. Jinja `StrictUndefined` is set: referencing an unknown
+placeholder fails the render instead of silently producing blanks
+(fail-closed). `trim_blocks`/`lstrip_blocks` keep template output tidy.
+
+**Row placeholders** (`{{ row.<key> }}` inside `{% for row in rows %}`;
+`rows` is the flat mailbox list, `groups` the per-tenant mapping
+`tenant → rows` when `report.group_by_tenant` is on):
+
+| Key | Content |
+|---|---|
+| `row.mailbox` | mailbox name (quota target) |
+| `row.name` | display name (falls back to the mailbox) |
+| `row.mail_primary` / `row.mail_aliases` | primary address / alias list |
+| `row.department` / `row.company` | directory attributes |
+| `row.used` / `row.limit` / `row.free` | sizes, pre-formatted (e.g. `9,82 GB`) |
+| `row.percent` | exact usage percent (one decimal, `—` when limit is 0) |
+| `row.status` | status label: `OK` / `WARNUNG` / `KRITISCH` / `kein LDAP-Eintrag` / `kein Quota-Datensatz` / `0 (Sonderfall)` |
+| `row.status_class` | matching CSS class: `ok` / `warn` / `critical` / `no-ldap` / `no-quota` / `limit0` |
+| `row.tenant` / `row.error` | tenant name / per-mailbox error text |
+
+Templates may also use the filters `kib` (size formatting) and
+`percent` (percent formatting) on raw numbers, and `groups.items()` for
+tenant sections (see the built-in templates for idioms).
+
+**Summary placeholders** (`{{ summary.<key> }}`):
+
+| Key | Content |
+|---|---|
+| `summary.deployment` / `summary.date` | deployment label / report date |
+| `summary.n` / `summary.warn` / `summary.crit` | mailboxes checked / WARNING / CRITICAL counts |
+| `summary.no_ldap` / `summary.no_quota` | mailboxes without a directory entry / without a quota record |
+| `summary.warn_percent` / `summary.critical_percent` | configured highlight thresholds |
+| `summary.mode` / `summary.threshold_desc` | `all` / `below_threshold` (+ threshold description) |
+| `summary.version` | tool version (report footer) |
+
+Renderer context per body template: `rows`, `groups`, `summary`,
+`errors` (list of per-mailbox collector errors, `{mailbox}: {error}`).
+
+**Subject schema** (`report.subject`): plain `str.format` placeholders
+— deliberately not Jinja, so the config stays simple; unknown
+placeholders fail the run (fail-closed):
+
+`{deployment}` `{date}` `{n}` `{warn}` `{crit}` `{no_ldap}` `{no_quota}`
+
 ## Operating modes and exit codes
 
 | Mode | Effect |
@@ -288,6 +421,82 @@ guarantees.
   platform's means.
 - Deliver the report to a small, accountable recipient list: it contains
   per-mailbox usage and directory metadata for your whole user base.
+
+## Hardening / read-only operation
+
+The container **can run with a read-only root filesystem**. It only
+ever writes to `/tmp`:
+
+- the scheduler heartbeat file (`/tmp/last-run`, override with
+  `HEARTBEAT_FILE`),
+- a temporary doveadm client config per collection run (created with
+  `mkstemp`, mode 0600, holding the shared doveadm password — deleted
+  after the run; the secret is never passed as an argument or
+  environment variable),
+- the SSH control socket (`/tmp/mqr-ssh-*`) for the `ssh_exec` fallback.
+
+Config, templates, secrets and certificates are only ever read. The
+process runs as the unprivileged user `mqr` (UID 1000) and the image
+exposes no ports and has no persistent storage.
+
+docker compose:
+
+```yaml
+services:
+  mail-quota-report:
+    image: mail-quota-report:0.2
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      SCHEDULE: "0 7 * * 1"
+      HEALTHCHECK_MAX_AGE_H: "170"
+    volumes:
+      - ./config:/etc/mail-quota-report:ro
+      - ./secrets:/run/secrets:ro
+```
+
+Docker Swarm (stack file):
+
+```yaml
+version: "3.8"
+services:
+  mail-quota-report:
+    image: "registry.example.net/your-team/mail-quota-report:0.2@sha256:<digest>"
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      SCHEDULE: "0 7 * * 1"
+      HEALTHCHECK_MAX_AGE_H: "170"
+    volumes:
+      - type: bind
+        source: /srv/mail-quota-report/config
+        target: /etc/mail-quota-report
+        read_only: true
+      - type: bind
+        source: /srv/mail-quota-report/secrets
+        target: /run/secrets
+        read_only: true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
+```
+
+**Health check note:** the built-in health check verifies the heartbeat
+file's age against `HEALTHCHECK_MAX_AGE_H`. The scheduler writes the
+heartbeat at start and after every real run, so the check turns healthy
+within seconds of scheduler start — the image's HEALTHCHECK grants a
+5-minute start period for exactly that ramp-up (`--start-period`). If
+you override the health check in your compose/stack file, keep a
+`start_period` that covers the container start→scheduler start gap;
+and since `/tmp` is a tmpfs, a container restart loses the previous
+heartbeat until the scheduler writes a fresh one.
 
 ## Development and CI
 

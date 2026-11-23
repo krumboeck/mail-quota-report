@@ -5,6 +5,20 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.2.0] — 2026-11-23
 
+### Docs
+
+- README: new "Report templates" section (built-in template files,
+  override via `message.template_dir` / per-purpose `message.templates`
+  mapping, builtin-fallback selection logic, placeholder reference for
+  rows/summary/subject schema, `status_class`/`status_label`, autoescape
+  rule for `.html.j2`, StrictUndefined).
+- README: new "Configuration reference" section (compact YAML option
+  table per block, `*_FILE` secrets pattern, ENV overrides).
+- README: new "Hardening / read-only operation" section — the container
+  only writes to `/tmp`, with compose and Swarm snippets
+  (`read_only: true`, tmpfs `/tmp`, read-only mounts) and a health check
+  start-period note.
+
 ### Changed
 
 - Public release preparation: complete English documentation (README as
